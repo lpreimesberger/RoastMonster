@@ -9,8 +9,19 @@ from bulletspy import (
     app,
     calculate_stm32_crc32,
     compute_roast_stage,
+    ensure_self_signed_cert,
     prepare_r2_command,
 )
+
+
+def test_ensure_self_signed_cert(tmp_path):
+    cert_file, key_file = ensure_self_signed_cert(cert_dir=str(tmp_path))
+    assert (tmp_path / "cert.pem").is_file()
+    assert (tmp_path / "key.pem").is_file()
+    assert "BEGIN CERTIFICATE" in (tmp_path / "cert.pem").read_text()
+    # Second call reuses existing files
+    cert_file2, key_file2 = ensure_self_signed_cert(cert_dir=str(tmp_path))
+    assert cert_file == cert_file2 and key_file == key_file2
 
 
 def test_compute_roast_stage_zones_and_cycles():

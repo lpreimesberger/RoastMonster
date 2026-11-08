@@ -17,8 +17,11 @@ import json
 import logging
 import math
 import os
+from pathlib import Path
 import platform
+import socket
 import struct
+import subprocess
 import time
 from typing import Any, Dict, List, Optional, Set
 
@@ -2154,7 +2157,73 @@ async def dashboard() -> str:
     return DASHBOARD_HTML
 
 
+def ensure_self_signed_cert(
+    cert_path: Optional[str] = None,
+    key_path: Optional[str] = None,
+    cert_dir: Optional[str] = None,
+) -> tuple[str, str]:
+    """
+    Ensures a local self-signed TLS certificate and private key exist so BulletSpy
+    can serve over HTTPS (establishing a browser Secure Context `window.isSecureContext`
+    on LAN for Chrome's Gemini Nano `LanguageModel` API, Web Speech, and Clipboard).
+    """
+    base_dir = Path(cert_dir) if cert_dir else Path(__file__).resolve().parent / ".certs"
+    c_file = Path(cert_path) if cert_path else base_dir / "cert.pem"
+    k_file = Path(key_path) if key_path else base_dir / "key.pem"
+
+    if c_file.is_file() and k_file.is_file():
+        return str(c_file), str(k_file)
+
+    c_file.parent.mkdir(parents=True, exist_ok=True)
+    k_file.parent.mkdir(parents=True, exist_ok=True)
+
+    # Detect local hostname and LAN IP for Subject Alternative Name (SAN)
+    hostname = socket.gethostname()
+    lan_ip = "127.0.0.1"
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("10.255.255.255", 1))
+            lan_ip = s.getsockname()[0]
+    except Exception:
+        pass
+
+    san_entries = ["DNS:localhost", "DNS:bulletspy", "DNS:bulletspy.local", "IP:127.0.0.1"]
+    if hostname and hostname not in ("localhost", "bulletspy"):
+        san_entries.append(f"DNS:{hostname}")
+        san_entries.append(f"DNS:{hostname}.local")
+    if lan_ip and lan_ip != "127.0.0.1":
+        san_entries.append(f"IP:{lan_ip}")
+    san_str = ",".join(san_entries)
+
+    log.info("Generating self-signed HTTPS certificate in %s (SAN: %s)...", c_file.parent, san_str)
+    cmd = [
+        "openssl",
+        "req",
+        "-x509",
+        "-newkey",
+        "rsa:2048",
+        "-nodes",
+        "-keyout",
+        str(k_file),
+        "-out",
+        str(c_file),
+        "-days",
+        "3650",
+        "-subj",
+        f"/CN={hostname or 'bulletspy'}/O=BulletSpy",
+        "-addext",
+        f"subjectAltName={san_str}",
+    ]
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        os.chmod(k_file, 0o600)
+    except Exception:
+        pass
+    return str(c_file), str(k_file)
+
+
 def main() -> None:
+    use_https_default = os.environ.get("BULLETSPY_HTTPS", "0").lower() in ("1", "true", "yes")
     parser = argparse.ArgumentParser(description="BulletSpy Aillio Bullet R1/R2 Telemetry Server")
     parser.add_argument("--host", default="0.0.0.0", help="Bind host (default: 0.0.0.0)")
     parser.add_argument("--port", type=int, default=8080, help="Bind port (default: 8080)")
@@ -2164,11 +2233,26 @@ def main() -> None:
         default=ALLOW_WRITE,
         help="Enable USB command dispatch to the Bullet (default: read-only)",
     )
+    parser.add_argument(
+        "--https",
+        action="store_true",
+        default=use_https_default,
+        help="Serve over HTTPS (and WSS) using an auto-generated self-signed certificate",
+    )
+    parser.add_argument("--ssl-certfile", default=None, help="Custom TLS certificate path (optional)")
+    parser.add_argument("--ssl-keyfile", default=None, help="Custom TLS private key path (optional)")
     args = parser.parse_args()
     driver.allow_write = args.allow_write
 
+    ssl_kwargs: Dict[str, Any] = {}
+    if args.https or (args.ssl_certfile and args.ssl_keyfile):
+        cert_file, key_file = ensure_self_signed_cert(args.ssl_certfile, args.ssl_keyfile)
+        ssl_kwargs["ssl_certfile"] = cert_file
+        ssl_kwargs["ssl_keyfile"] = key_file
+        log.info("HTTPS enabled — open https://<host>:%d (WebSocket will auto-upgrade to wss://)", args.port)
+
     import uvicorn
-    uvicorn.run(app, host=args.host, port=args.port)
+    uvicorn.run(app, host=args.host, port=args.port, **ssl_kwargs)
 
 
 if __name__ == "__main__":

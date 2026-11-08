@@ -49,8 +49,8 @@ What [`deploy/install_pi.sh`](deploy/install_pi.sh) sets up:
 # Safe Read-Only Telemetry Mode (default, port 8080):
 ./venv/bin/python bulletspy.py
 
-# Custom port + Enable USB Command Dispatch (PRS, Power, Fan, Drum):
-./venv/bin/python bulletspy.py --port 9999 --allow-write
+# Custom port + HTTPS (auto-generates self-signed cert in .certs/) + Enable USB Command Dispatch:
+./venv/bin/python bulletspy.py --port 9999 --https --allow-write
 ```
 
 ### Optional: Enable Auto-Start on Boot (`systemd`)
@@ -90,9 +90,12 @@ Open `http://localhost:9999` in your browser.
 1. In Chrome (`v138+`), enable:
    - `chrome://flags/#optimization-guide-on-device-model` → **Enabled BypassPerfRequirement**
    - `chrome://flags/#prompt-api-for-gemini-nano` → **Enabled**
-2. Because Chrome restricts `LanguageModel` to Secure Contexts (`localhost` or `HTTPS`), when connecting to your Pi 4 over LAN either:
-   - Forward the port over SSH: `ssh -L 8080:localhost:8080 pi@<pi-ip>` and open `http://localhost:8080`, **or**
-   - Add `http://<pi-ip>:8080` to `chrome://flags/#unsafely-treat-insecure-origin-as-secure`.
+2. Because Chrome restricts `LanguageModel`, Web Speech, and Clipboard APIs to Secure Contexts (`HTTPS` or `localhost`), simply pass **`--https`** when starting `bulletspy.py`:
+   ```bash
+   ./venv/bin/python bulletspy.py --port 9999 --https --allow-write
+   ```
+   - On first run, `bulletspy.py` automatically generates a 10-year self-signed TLS certificate in `.certs/cert.pem` and `.certs/key.pem` (including your LAN IP and hostname in the Subject Alternative Name).
+   - Open `https://<pi-ip>:9999` in Chrome, click **Advanced → Proceed** once, and `window.isSecureContext` will be `true` (and the WebSocket automatically upgrades to `wss://`) without weakening any browser security flags on your workstation!
 3. Click **`✨ Enable Gemini Nano`** in the Roast Monster header on the dashboard.
 
 ---
