@@ -1,0 +1,6 @@
+# Aillio Bullet R1 / R2 STM32 USB Rules
+SUBSYSTEM=="usb", ATTR{idVendor}=="0483", ATTR{idProduct}=="5741", MODE="0666", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0483", ATTR{idProduct}=="a27e", MODE="0666", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0483", ATTR{idProduct}=="a4cd", MODE="0666", GROUP="plugdev"
+# Catch-all for any Aillio STM32 PID on the roaster cart Pi:
+SUBSYSTEM=="usb", ATTR{idVendor}=="0483", MODE="0666", GROUP="plugdev"

@@ -1,0 +1,17 @@
+[Unit]
+Description=BulletSpy Aillio Bullet R1/R2 Telemetry Daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=/home/%i/bulletspy
+Environment="BULLETSPY_ALLOW_WRITE=0"
+Environment="BULLETSPY_POLL_INTERVAL=0.25"
+ExecStart=/home/%i/bulletspy/venv/bin/python /home/%i/bulletspy/bulletspy.py --host 0.0.0.0 --port 8080
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

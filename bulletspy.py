@@ -1444,29 +1444,29 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- On-Device AI Roast Co-Pilot & Hands-Free Voice / Milestone Logger -->
-  <div class="copilot-grid">
-    <div class="copilot-card">
-      <div class="copilot-header">
+  <!-- On-Device AI Roast Monster & Hands-Free Voice / Milestone Logger -->
+  <div class="monster-grid">
+    <div class="monster-card">
+      <div class="monster-header">
         <div>
-          <span class="label">ROAST CO-PILOT // CURVE ANOMALY RADAR</span>
+          <span class="label">ROAST MONSTER // CURVE ANOMALY RADAR</span>
           <span id="ai-engine-pill" class="ai-pill">Physics Engine (Fallback)</span>
         </div>
         <div class="btn-group">
           <button id="init-ai-btn" title="Enable Chrome Built-in Gemini Nano (LanguageModel API)">✨ Enable Gemini Nano</button>
-          <button id="run-copilot-btn" title="Run immediate curve evaluation">Analyze Now</button>
+          <button id="run-monster-btn" title="Run immediate curve evaluation">Analyze Now</button>
         </div>
       </div>
-      <div id="copilot-box" class="copilot-status-box">
-        <div id="copilot-headline" class="copilot-headline">[OPTIMAL] Waiting for 10s telemetry window...</div>
-        <div id="copilot-suggestion" class="copilot-suggestion">
+      <div id="monster-box" class="monster-status-box">
+        <div id="monster-headline" class="monster-headline">[OPTIMAL] Waiting for 10s telemetry window...</div>
+        <div id="monster-suggestion" class="monster-suggestion">
           Monitors 30s RoR slope for RoR crashes, post-crack flicks, and pre-FC stalls every 10s.
         </div>
       </div>
     </div>
 
-    <div class="copilot-card">
-      <div class="copilot-header">
+    <div class="monster-card">
+      <div class="monster-header">
         <span class="label">HANDS-FREE VOICE LOG &amp; BATCH SUMMARY</span>
         <div class="btn-group">
           <button id="voice-log-btn" title="Speak a roast note via Web Speech API">🎤 Voice Note</button>
@@ -1777,14 +1777,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
   }
 
-  // --- CHROME BUILT-IN AI (GEMINI NANO) ROAST CO-PILOT + HEURISTIC FALLBACK ---
+  // --- CHROME BUILT-IN AI (GEMINI NANO) ROAST MONSTER + HEURISTIC FALLBACK ---
   let baseAiSession = null;
   let lastRorSampleTime = 0;
-  let lastCoPilotEvalTime = 0;
+  let lastMonsterEvalTime = 0;
   const rorHistory = []; // Sampled every 5s (keeps last 12 samples = 60s)
   const roastMilestones = [];
 
-  const coPilotSchema = {
+  const roastMonsterSchema = {
     type: 'object',
     properties: {
       status: { type: 'string', enum: ['OPTIMAL', 'WATCH', 'WARNING'] },
@@ -1795,10 +1795,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     additionalProperties: false
   };
 
-  function renderCoPilotAdvice(advice, sourceLabel) {
-    const box = document.getElementById('copilot-box');
-    const headEl = document.getElementById('copilot-headline');
-    const sugEl = document.getElementById('copilot-suggestion');
+  function renderMonsterAdvice(advice, sourceLabel) {
+    const box = document.getElementById('monster-box');
+    const headEl = document.getElementById('monster-headline');
+    const sugEl = document.getElementById('monster-suggestion');
     const pillEl = document.getElementById('ai-engine-pill');
 
     const colorMap = { OPTIMAL: '#10b981', WATCH: '#f59e0b', WARNING: '#ef4444' };
@@ -1815,10 +1815,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const btn = document.getElementById('init-ai-btn');
     if (!('LanguageModel' in self)) {
       pillEl.textContent = 'Physics Engine (Nano Unavailable)';
-      renderCoPilotAdvice({
+      renderMonsterAdvice({
         status: 'WATCH',
         headline: 'Chrome Prompt API (LanguageModel) not detected in this browser',
-        suggestion: 'Running deterministic Roast Physics Engine. To enable Gemini Nano, open in Chrome 138+ on localhost/HTTPS with #prompt-api-for-gemini-nano enabled.'
+        suggestion: 'Running deterministic Roast Monster Physics Engine. To enable Gemini Nano, open in Chrome 138+ on localhost/HTTPS with #prompt-api-for-gemini-nano enabled.'
       });
       return false;
     }
@@ -1834,7 +1834,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         initialPrompts: [{
           role: 'system',
           content:
-            'You are an expert specialty coffee roasting co-pilot monitoring an Aillio Bullet R2. ' +
+            'You are Roast Monster, an expert specialty coffee roasting advisor monitoring an Aillio Bullet R2. ' +
             'Analyze the telemetry snapshot. Look for RoR crashes (rapid drop in Rate of Rise), ' +
             'RoR flicks (sudden late spike), stalling heat before First Crack (~196C-202C), or excessive drum heat. ' +
             'Be terse, practical, and technical.'
@@ -1860,7 +1860,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
   }
 
-  function evaluateHeuristicCoPilot(d) {
+  function evaluateHeuristicMonster(d) {
     const trend = rorHistory.slice(-6);
     const rorDelta = trend.length >= 2 ? (trend[trend.length - 1] - trend[0]) : 0;
 
@@ -1911,8 +1911,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   async function evaluateRoastState(latestData, force = false) {
     if (!latestData) return;
     const now = Date.now();
-    if (!force && now - lastCoPilotEvalTime < 10000) return;
-    lastCoPilotEvalTime = now;
+    if (!force && now - lastMonsterEvalTime < 10000) return;
+    lastMonsterEvalTime = now;
 
     if (baseAiSession && latestData.cycle === 'ROASTING') {
       const turnSession = await baseAiSession.clone();
@@ -1930,10 +1930,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         });
         const rawResult = await turnSession.prompt(
           `Current Roast Telemetry: ${promptText}`,
-          { responseConstraint: coPilotSchema }
+          { responseConstraint: roastMonsterSchema }
         );
         const advice = JSON.parse(rawResult);
-        renderCoPilotAdvice(advice, 'Gemini Nano (On-Device)');
+        renderMonsterAdvice(advice, 'Gemini Nano (On-Device)');
         return;
       } catch (err) {
         console.warn('Gemini Nano prompt error, using physics fallback:', err);
@@ -1942,12 +1942,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }
     }
 
-    const fallbackAdvice = evaluateHeuristicCoPilot(latestData);
-    renderCoPilotAdvice(fallbackAdvice, baseAiSession ? 'Gemini Nano (On-Device)' : 'Physics Engine (Active)');
+    const fallbackAdvice = evaluateHeuristicMonster(latestData);
+    renderMonsterAdvice(fallbackAdvice, baseAiSession ? 'Gemini Nano (On-Device)' : 'Physics Engine (Active)');
   }
 
   document.getElementById('init-ai-btn').addEventListener('click', initChromeAI);
-  document.getElementById('run-copilot-btn').addEventListener('click', () => {
+  document.getElementById('run-monster-btn').addEventListener('click', () => {
     if (history.length > 0) evaluateRoastState(history[history.length - 1], true);
   });
 
@@ -2132,7 +2132,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (history.length > MAX_POINTS) history.shift();
       drawChart();
 
-      // Sample RoR every 5s (keep last 12 samples = 60s) & run Co-Pilot every 10s
+      // Sample RoR every 5s (keep last 12 samples = 60s) & run Roast Monster every 10s
       const nowMs = Date.now();
       if (nowMs - lastRorSampleTime >= 5000) {
         lastRorSampleTime = nowMs;
