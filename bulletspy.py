@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: PolyForm-Shield-1.0.0
+# Copyright (c) 2026 Beanzilla Coffee Worldwide LLC. All rights reserved.
+# Required Notice: Copyright (c) 2026 Beanzilla Coffee Worldwide LLC. All rights reserved. Beanzilla, Beanzilla Coffee Worldwide, the Beanzilla Kaiju logo, and BulletSpy are trademarks of Beanzilla Coffee Worldwide LLC.
+# Licensor Line of Business: Coffee Roasting Telemetry, Roaster Control Hardware, Embedded Firmware, Roast Analysis Software, and Specialty Coffee Products by Beanzilla Coffee Worldwide LLC.
 """
-BulletSpy (v0.1 POC)
+BulletSpy (v0.1 POC) — Beanzilla Coffee Worldwide LLC
 Asynchronous 4Hz USB Telemetry Poller, Binary Frame Unpacker, FastAPI WebSocket
 Broadcaster, and Dark-Mode Dashboard for the Aillio Bullet R1 / R2.
 
+Licensed under the PolyForm Shield License 1.0.0 (see LICENSE).
 By default, BulletSpy runs in safe READ-ONLY mode (only polling telemetry).
 Set BULLETSPY_ALLOW_WRITE=1 (or pass --allow-write) to enable command dispatch.
 """
@@ -1491,6 +1496,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     RAW USB PAYLOAD INSPECTOR (64B FRAMES)
   </h3>
   <pre id="raw-hex">Waiting for frames...</pre>
+
+  <footer style="margin-top:20px; padding-top:12px; border-top:1px solid #262936; color:var(--muted); font-size:0.75rem; display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+    <span>&copy; 2026 Beanzilla Coffee Worldwide LLC. All rights reserved. Beanzilla&trade; &amp; BulletSpy&trade; are trademarks of Beanzilla Coffee Worldwide LLC.</span>
+    <span>Licensed under PolyForm Shield License 1.0.0</span>
+  </footer>
 
 <script>
   const history = [];

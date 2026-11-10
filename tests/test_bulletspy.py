@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: PolyForm-Shield-1.0.0
+# Copyright (c) 2026 Beanzilla Coffee Worldwide LLC. All rights reserved.
+# Required Notice: Copyright (c) 2026 Beanzilla Coffee Worldwide LLC. All rights reserved. Beanzilla, Beanzilla Coffee Worldwide, the Beanzilla Kaiju logo, and BulletSpy are trademarks of Beanzilla Coffee Worldwide LLC.
+
 import struct
 from fastapi.testclient import TestClient
 

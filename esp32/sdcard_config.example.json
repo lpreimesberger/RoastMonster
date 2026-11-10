@@ -1,0 +1,7 @@
+{
+  "wifi_ssid": "YOUR_WIFI_SSID",
+  "wifi_password": "YOUR_WIFI_PASSWORD",
+  "hostname": "bulletspy",
+  "allow_write": true,
+  "target_drop_c": 210.0
+}

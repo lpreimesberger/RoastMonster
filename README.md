@@ -120,3 +120,17 @@ Open `http://localhost:9999` in your browser.
 - [`tests/test_bulletspy.py`](tests/test_bulletspy.py) — `pytest` suite covering R2/R1 binary struct unpacking, STM32 CRC-32, roast stage classification, read-only guard, and WebSocket streaming.
 - [`reference/`](reference/) — Reference Artisan R1 and R2 drivers (`aillio_r1_ref.py`, `aillio_r2_ref.py`) for byte-offset verification.
 - [`spec.md`](spec.md) — Initial architecture & protocol specification.
+- [`esp32/`](esp32/) — Standalone C++17 firmware for the Waveshare `ESP32-S3-RLCD-4.2` (`400×300` Sitronix `ST7305` Paper-Like RLCD + USB OTG Host).
+- [`LICENSE`](LICENSE) — PolyForm Shield License 1.0.0 & Trademark Notice.
+
+---
+
+## License, Copyright & Trademarks
+
+**Copyright &copy; 2026 Beanzilla Coffee Worldwide LLC. All rights reserved.**
+
+Licensed under the **[PolyForm Shield License 1.0.0](LICENSE)** (`SPDX-License-Identifier: PolyForm-Shield-1.0.0`).
+
+- **Required Notice:** `Copyright (c) 2026 Beanzilla Coffee Worldwide LLC. All rights reserved. Beanzilla, Beanzilla Coffee Worldwide, the Beanzilla Kaiju logo, and BulletSpy are trademarks of Beanzilla Coffee Worldwide LLC.`
+- **Licensor Line of Business:** Coffee Roasting Telemetry, Roaster Control Hardware, Embedded Firmware, Roast Analysis Software, and Specialty Coffee Products by Beanzilla Coffee Worldwide LLC.
+- **Trademarks:** **Beanzilla&trade;**, **Beanzilla Coffee Worldwide&trade;**, **BulletSpy&trade;**, and the Beanzilla Kaiju logo ([`beanzilla-black.png`](beanzilla-black.png)) are proprietary trademarks and brand assets of **Beanzilla Coffee Worldwide LLC**. The PolyForm Shield License 1.0.0 does not grant any rights to use the licensor's trademarks or logos.
