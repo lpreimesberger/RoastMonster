@@ -33,6 +33,10 @@
 
 using namespace bulletspy;
 
+// Allocate a 32 KB stack for loopTask so WiFiClientSecure (mbedtls TLS 1.2/1.3 + ECDSA P-256)
+// never overflows the default 8 KB Arduino loopTask stack during GitHub Release OTA checks.
+SET_LOOP_TASK_STACK_SIZE(32 * 1024);
+
 static ST7305Display    g_display;
 static BoardPeripherals g_peripherals;
 static ProvisionManager g_provision;
@@ -42,10 +46,19 @@ static OtaManager       g_ota;
 static AsyncWebServer   g_server(80);
 static AsyncWebSocket   g_ws("/ws");
 
-static uint32_t g_last_poll_ms   = 0;
-static uint32_t g_last_sensor_ms = 0;
-static uint32_t g_last_sd_log_ms = 0;
-static bool     g_last_key_state = HIGH;
+static uint32_t g_last_poll_ms         = 0;
+static uint32_t g_last_sensor_ms       = 0;
+static uint32_t g_last_sd_log_ms       = 0;
+static bool     g_last_key_state       = HIGH;
+static bool     g_pc_usb_host_detected = false;
+
+static void check_pc_usb_host_latch() {
+    if (USB_SERIAL_JTAG.int_raw.sof_int_raw ||
+        USB_SERIAL_JTAG.fram_num.sof_frame_index != 0 ||
+        HWCDC::isPlugged()) {
+        g_pc_usb_host_detected = true;
+    }
+}
 
 static void send_gzipped_dashboard(AsyncWebServerRequest* req) {
     AsyncWebServerResponse* res = req->beginResponse(
@@ -236,6 +249,7 @@ static void setup_http_routes() {
 
 void setup() {
     Serial.begin(115200);
+    check_pc_usb_host_latch();
 
     // 1. Initialize onboard I2C, SHTC3, ES8311 DAC, and side buttons
     g_peripherals.begin();
@@ -252,9 +266,11 @@ void setup() {
     g_display.render_boot_splash("SCANNING 2.4GHZ & CONNECTING WIFI...");
     g_display.display();
     delay(800);
+    check_pc_usb_host_latch();
 
     // 3. Mount MicroSD (/config.json), load NVS flash, and join Wi-Fi or start SoftAP Captive Portal
     g_provision.begin();
+    check_pc_usb_host_latch();
 
     // 3b. Check for /update.bin on MicroSD card (auto-verifies ESP32-S3 header + SHA-256 and flashes)
     if (g_ota.check_and_apply_sdcard_update(g_provision.is_sd_mounted(), g_display)) {
@@ -276,6 +292,7 @@ void setup() {
 }
 
 void loop() {
+    check_pc_usb_host_latch();
     g_provision.loop();
     g_ws.cleanupClients();
 
@@ -307,15 +324,10 @@ void loop() {
         }
     }
 
-    // Only switch USB pins (GPIO19/20) to USB Host Mode when NOT plugged into a PC host
-    // (hardware 1kHz USB SOF frame counter is idle) and NOT in SoftAP setup mode.
-    if (now_ms > 25000 && !g_provision.is_ap_setup_mode()) {
-        uint32_t f0 = USB_SERIAL_JTAG.fram_num.sof_frame_index;
-        delay(3);
-        uint32_t f1 = USB_SERIAL_JTAG.fram_num.sof_frame_index;
-        if (f0 == f1 && !HWCDC::isPlugged()) {
-            g_bullet.start_usb_host_tasks();
-        }
+    // Only switch USB pins (GPIO19/20) to USB Host Mode when NO PC USB host enumerated us at boot
+    // and NOT in SoftAP setup mode.
+    if (now_ms > 20000 && !g_pc_usb_host_detected && !g_provision.is_ap_setup_mode()) {
+        g_bullet.start_usb_host_tasks();
     }
 
     // Side [KEY] button (GPIO18): dismisses AP setup banner on RLCD or advances PRS cycle

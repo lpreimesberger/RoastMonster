@@ -392,12 +392,22 @@ public:
     void refresh_scan_cache(bool check_saved_ssid_case = false, bool* out_found_in_scan = nullptr) {
         int n = WiFi.scanNetworks(false, false);
         bool found = false;
+        best_bssid_valid_ = false;
+        best_channel_     = 0;
+        int best_rssi     = -1000;
+
         if (check_saved_ssid_case && std::strlen(config_.wifi_ssid) > 0 && n > 0) {
             for (int i = 0; i < n; ++i) {
                 String s = WiFi.SSID(i);
                 if (s == config_.wifi_ssid) {
                     found = true;
-                    break;
+                    int rssi = WiFi.RSSI(i);
+                    if (rssi > best_rssi && WiFi.BSSID(i) != nullptr) {
+                        best_rssi     = rssi;
+                        best_channel_ = WiFi.channel(i);
+                        std::memcpy(best_bssid_, WiFi.BSSID(i), 6);
+                        best_bssid_valid_ = true;
+                    }
                 }
             }
             // Auto-fix phone keyboard capitalization (e.g., "Milfgard" -> "milfgard")
@@ -410,6 +420,12 @@ public:
                         save_nvs(s.c_str(), config_.wifi_password, config_.hostname,
                                  config_.allow_write, config_.target_drop_c);
                         found = true;
+                        best_rssi     = WiFi.RSSI(i);
+                        best_channel_ = WiFi.channel(i);
+                        if (WiFi.BSSID(i) != nullptr) {
+                            std::memcpy(best_bssid_, WiFi.BSSID(i), 6);
+                            best_bssid_valid_ = true;
+                        }
                         break;
                     }
                 }
@@ -468,6 +484,8 @@ public:
         WiFi.mode(WIFI_STA);
         WiFi.setSleep(WIFI_PS_NONE);
         WiFi.setTxPower(WIFI_POWER_15dBm);
+        WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
+        WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
         WiFi.setAutoReconnect(true);
         WiFi.setHostname(config_.hostname);
 
@@ -477,26 +495,50 @@ public:
         refresh_scan_cache(true, &found_in_scan);
 
         if (std::strlen(config_.wifi_ssid) > 0) {
-            Serial.printf("[BulletSpy Wi-Fi] Connecting to 2.4GHz SSID '%s' (found_in_scan=%d)...\n",
-                          config_.wifi_ssid, found_in_scan ? 1 : 0);
-            WiFi.begin(config_.wifi_ssid, config_.wifi_password);
-            uint32_t start = millis();
-            while (WiFi.status() != WL_CONNECTED && (millis() - start) < 16000) {
-                delay(250);
-            }
-            if (WiFi.status() == WL_CONNECTED) {
-                WiFi.setSleep(WIFI_PS_NONE);
-                last_error_[0]       = '\0';
-                ap_mode_active_      = false;
-                ap_banner_dismissed_ = true;
-                MDNS.begin(config_.hostname);
-                MDNS.addService("http", "tcp", 80);
-                std::snprintf(status_label_, sizeof(status_label_), "%s", WiFi.localIP().toString().c_str());
-                Serial.printf("[BulletSpy Wi-Fi] Connected! IP=%s\n", status_label_);
-                return true;
+            wl_status_t st = WL_IDLE_STATUS;
+            for (int attempt = 1; attempt <= 3; ++attempt) {
+                if (attempt <= 2 && best_bssid_valid_ && best_channel_ > 0) {
+                    Serial.printf("[BulletSpy Wi-Fi] Attempt %d/3: pinning 2.4GHz ch=%d BSSID=%02X:%02X:%02X:%02X:%02X:%02X for '%s'...\n",
+                                  attempt, best_channel_,
+                                  best_bssid_[0], best_bssid_[1], best_bssid_[2],
+                                  best_bssid_[3], best_bssid_[4], best_bssid_[5],
+                                  config_.wifi_ssid);
+                    WiFi.begin(config_.wifi_ssid, config_.wifi_password, best_channel_, best_bssid_);
+                } else {
+                    Serial.printf("[BulletSpy Wi-Fi] Attempt %d/3: connecting to 2.4GHz SSID '%s' (found_in_scan=%d)...\n",
+                                  attempt, config_.wifi_ssid, found_in_scan ? 1 : 0);
+                    WiFi.begin(config_.wifi_ssid, config_.wifi_password);
+                }
+
+                uint32_t start = millis();
+                while (WiFi.status() != WL_CONNECTED && (millis() - start) < 6500) {
+                    delay(200);
+                    st = WiFi.status();
+                    // If tri-band band-steering rejected the first association (WL_CONNECTION_LOST=5),
+                    // retry immediately so the AP sees a second 2.4GHz association and accepts it.
+                    if ((millis() - start) > 1600 && (st == WL_CONNECTION_LOST || st == WL_CONNECT_FAILED)) {
+                        break;
+                    }
+                }
+
+                if (WiFi.status() == WL_CONNECTED) {
+                    WiFi.setSleep(WIFI_PS_NONE);
+                    last_error_[0]       = '\0';
+                    ap_mode_active_      = false;
+                    ap_banner_dismissed_ = true;
+                    MDNS.begin(config_.hostname);
+                    MDNS.addService("http", "tcp", 80);
+                    std::snprintf(status_label_, sizeof(status_label_), "%s", WiFi.localIP().toString().c_str());
+                    Serial.printf("[BulletSpy Wi-Fi] Connected on attempt %d! IP=%s\n", attempt, status_label_);
+                    return true;
+                }
+
+                st = WiFi.status();
+                Serial.printf("[BulletSpy Wi-Fi] Attempt %d ended with status=%d\n", attempt, (int)st);
+                WiFi.disconnect(false);
+                delay(300);
             }
 
-            wl_status_t st = WiFi.status();
             if (!found_in_scan) {
                 std::snprintf(last_error_, sizeof(last_error_),
                               "SSID '%s' not found on 2.4 GHz (5 GHz-only?). Select a 2.4 GHz network below.",
@@ -564,6 +606,9 @@ private:
     bool sd_mounted_          = false;
     bool ap_mode_active_      = false;
     bool ap_banner_dismissed_ = false;
+    uint8_t best_bssid_[6]    = {0};
+    int32_t best_channel_     = 0;
+    bool best_bssid_valid_    = false;
     char status_label_[32]    = "OFFLINE";
     char last_error_[160]     = {0};
 #ifdef ARDUINO
