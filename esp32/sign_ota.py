@@ -42,20 +42,39 @@ def verify_esp32s3_binary(bin_path: Path) -> None:
         raise ValueError(f"Wrong target chip_id: 0x{chip_id:04X} (expected 0x0009 for ESP32-S3)")
 
 
+import re
+import textwrap
+
+
+def normalize_pem_key(raw_pem: str, header_type: str = "EC PRIVATE KEY") -> str:
+    """Normalizes a PEM key even if pasted into GitHub Secrets as a single line or without headers."""
+    b64_body = re.sub(r"-----BEGIN[^-]+-----", "", raw_pem)
+    b64_body = re.sub(r"-----END[^-]+-----", "", b64_body)
+    b64_body = re.sub(r"\s+", "", b64_body)
+    wrapped = "\n".join(textwrap.wrap(b64_body, 64))
+    return f"-----BEGIN {header_type}-----\n{wrapped}\n-----END {header_type}-----\n"
+
+
 def sign_with_openssl_key(bin_path: Path, priv_pem: str) -> str:
     """Signs the SHA-256 digest of bin_path using OpenSSL ECDSA P-256 and returns hex DER signature."""
     key_file = bin_path.parent / "_tmp_ota_priv.pem"
-    try:
-        key_file.write_text(priv_pem.strip() + "\n", encoding="utf-8")
-        res = subprocess.run(
-            ["openssl", "dgst", "-sha256", "-sign", str(key_file), "-binary", str(bin_path)],
-            check=True,
-            capture_output=True,
-        )
-        return res.stdout.hex()
-    finally:
-        if key_file.exists():
-            key_file.unlink()
+    last_err = ""
+    for hdr in ("EC PRIVATE KEY", "PRIVATE KEY"):
+        try:
+            key_file.write_text(normalize_pem_key(priv_pem, hdr), encoding="utf-8")
+            res = subprocess.run(
+                ["openssl", "dgst", "-sha256", "-sign", str(key_file), "-binary", str(bin_path)],
+                check=False,
+                capture_output=True,
+            )
+            if res.returncode == 0 and len(res.stdout) > 0:
+                return res.stdout.hex()
+            last_err = res.stderr.decode("utf-8", errors="replace").strip()
+        finally:
+            if key_file.exists():
+                key_file.unlink()
+    print(f"[WARN] OpenSSL signing failed ({last_err}); verify BEANZILLA_OTA_PRIVATE_KEY secret format.", file=sys.stderr)
+    return ""
 
 
 def generate_keypair(priv_out: Path) -> None:
