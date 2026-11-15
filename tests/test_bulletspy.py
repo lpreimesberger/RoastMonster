@@ -12,6 +12,7 @@ from bulletspy import (
     FRAME_SIZE,
     app,
     calculate_stm32_crc32,
+    compute_eta_to_drop,
     compute_roast_stage,
     ensure_self_signed_cert,
     prepare_r2_command,
@@ -39,6 +40,17 @@ def test_compute_roast_stage_zones_and_cycles():
     assert compute_roast_stage(223.0, 0x06)["roast_stage_short"] == "VIENNA"
     assert compute_roast_stage(229.0, 0x06)["roast_stage_short"] == "FRENCH"
     assert compute_roast_stage(235.0, 0x06)["roast_stage_short"] == "ITALIAN / DROP!"
+
+
+def test_compute_eta_to_drop_curve_model():
+    assert compute_eta_to_drop(150.0, 10.0, 210.0, cycle_id=0x02)["eta_drop_str"] == "PREHT"
+    assert compute_eta_to_drop(180.0, 0.0, 210.0, cycle_id=0x04)["eta_drop_str"] == "READY"
+    drop_res = compute_eta_to_drop(210.5, 6.5, 210.0, cycle_id=0x06)
+    assert drop_res["eta_drop_seconds"] == 0
+    assert drop_res["eta_drop_str"] == "DROP!"
+    mid_res = compute_eta_to_drop(180.0, 12.0, 210.0, cycle_id=0x06, minutes=5, seconds=30)
+    assert 165 <= mid_res["eta_drop_seconds"] <= 230
+    assert mid_res["eta_drop_str"].startswith("-0")
 
 
 def test_stm32_crc32_and_prepare_r2_command():

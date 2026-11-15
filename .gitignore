@@ -3,3 +3,6 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .certs/
+esp32/.pio/
+dist/
+*.pem

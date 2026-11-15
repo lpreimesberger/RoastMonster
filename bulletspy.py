@@ -199,6 +199,77 @@ def compute_roast_stage(bean_temp_c: float, cycle_id: int = 0x06) -> Dict[str, A
     }
 
 
+def compute_eta_to_drop(
+    bean_temp_c: float,
+    bean_ror_c_min: float,
+    target_drop_c: float = 210.0,
+    cycle_id: int = 0x06,
+    minutes: int = 0,
+    seconds: int = 0,
+    heater_power: int = 7,
+    prev_eta_sec: float = -1.0,
+) -> Dict[str, Any]:
+    """
+    Computes a roast-curve-aware Estimated Time to Drop (ETA countdown) using:
+      1. Declining-RoR kinematic modeling (accounts for natural RoR deceleration
+         toward First Crack and Drop rather than naive linear ΔT / RoR),
+      2. Power-adjusted baseline cross-fade during early Turning Point (<90s),
+      3. EWMA smoothing so the MM:SS countdown ticks smoothly.
+    """
+    if cycle_id != 0x06:
+        label = "--:--"
+        if cycle_id in (0x02, 0x03):
+            label = "PREHT"
+        elif cycle_id == 0x04:
+            label = "READY"
+        elif cycle_id in (0x07, 0x08):
+            label = "COOL"
+        return {
+            "target_drop_c": round(target_drop_c, 1),
+            "eta_drop_seconds": 0 if cycle_id in (0x07, 0x08) else -1,
+            "eta_drop_str": label,
+            "_eta_smoothed": -1.0,
+        }
+
+    delta_t = target_drop_c - bean_temp_c
+    if delta_t <= 0.0:
+        return {
+            "target_drop_c": round(target_drop_c, 1),
+            "eta_drop_seconds": 0,
+            "eta_drop_str": "DROP!",
+            "_eta_smoothed": 0.0,
+        }
+
+    elapsed_sec = int(minutes) * 60 + int(seconds)
+    power_factor = 1.0 - 0.025 * ((heater_power or 7) - 7.0)
+    baseline_total_sec = (540.0 + (target_drop_c - 210.0) * 6.5) * power_factor
+    baseline_rem_sec = max(45.0, baseline_total_sec - elapsed_sec)
+    raw_eta_sec = baseline_rem_sec
+
+    if bean_ror_c_min > 1.2:
+        r_now = min(24.0, float(bean_ror_c_min))
+        r_terminal = max(4.5, min(9.5, 0.55 * r_now))
+        taper = max(0.0, min(1.0, delta_t / 45.0))
+        r_end = (1.0 - taper) * r_now + taper * r_terminal
+        r_eff = 0.5 * (r_now + r_end)
+        curve_eta_sec = (delta_t / r_eff) * 60.0
+
+        alpha = 1.0 if elapsed_sec >= 90 else max(0.0, min(1.0, (r_now - 1.2) / 2.3))
+        raw_eta_sec = (1.0 - alpha) * baseline_rem_sec + alpha * curve_eta_sec
+
+    raw_eta_sec = max(1.0, min(1800.0, raw_eta_sec))
+    smoothed = raw_eta_sec if prev_eta_sec <= 0.0 else (0.30 * raw_eta_sec + 0.70 * prev_eta_sec)
+    eta_sec = int(round(smoothed))
+    rem_m = min(99, eta_sec // 60)
+    rem_s = eta_sec % 60
+    return {
+        "target_drop_c": round(target_drop_c, 1),
+        "eta_drop_seconds": eta_sec,
+        "eta_drop_str": f"-{rem_m:02d}:{rem_s:02d}",
+        "_eta_smoothed": smoothed,
+    }
+
+
 def calculate_stm32_crc32(data: bytes) -> int:
     """
     STM32 hardware CRC-32 used by Aillio Bullet R2 command packets.
@@ -323,7 +394,10 @@ class BulletDriver:
             "humidity_pct": 0.0,
             "crack_count": 0,
             "error_counts": 0,
-            # Roast stage classification
+            # Roast stage classification & curve-aware ETA countdown
+            "target_drop_c": 210.0,
+            "eta_drop_seconds": -1,
+            "eta_drop_str": "--:--",
             "roast_stage": "IDLE / STANDBY",
             "roast_stage_short": "STANDBY",
             "roast_stage_desc": "Roaster idle — waiting for preheat",
@@ -551,6 +625,18 @@ class BulletDriver:
             cracks = data[56]
             state_byte = data[59]
 
+            eta_info = compute_eta_to_drop(
+                bt_probe,
+                bt_ror,
+                float(self.state.get("target_drop_c", 210.0)),
+                state_byte,
+                minutes,
+                seconds,
+                heater,
+                float(getattr(self, "_eta_smoothed", -1.0)),
+            )
+            self._eta_smoothed = eta_info.pop("_eta_smoothed", -1.0)
+
             self.state.update(
                 {
                     "cycle_id": state_byte,
@@ -576,6 +662,7 @@ class BulletDriver:
                     "drum_speed": drum,
                     "crack_count": cracks,
                     **compute_roast_stage(bt_probe, state_byte),
+                    **eta_info,
                 }
             )
             self.state["raw_frames"]["a0_temp"] = data.hex()
@@ -647,6 +734,18 @@ class BulletDriver:
             fan_rpm = struct.unpack("<h", pkt1[44:46])[0]
             voltage = float(struct.unpack("<h", pkt1[48:50])[0])
 
+            eta_info = compute_eta_to_drop(
+                bt_probe,
+                bt_ror,
+                float(self.state.get("target_drop_c", 210.0)),
+                state_byte,
+                minutes,
+                seconds,
+                heater_lvl,
+                float(getattr(self, "_eta_smoothed", -1.0)),
+            )
+            self._eta_smoothed = eta_info.pop("_eta_smoothed", -1.0)
+
             self.state.update(
                 {
                     "timestamp": round(time.time(), 3),
@@ -670,6 +769,7 @@ class BulletDriver:
                     "raw_pkt1_hex": pkt1.hex(),
                     "raw_pkt2_hex": pkt2.hex(),
                     **compute_roast_stage(bt_probe, state_byte),
+                    **eta_info,
                 }
             )
         return dict(self.state)
@@ -1382,6 +1482,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <option value="drum_temp_ibts_c">Drum IBTS (DT)</option>
       </select>
       <span id="target-delta" class="sub" style="margin:0 0 0 8px; font-weight:700;">Δ --.- °C to drop</span>
+      <span id="target-eta" class="clock-badge" style="margin-left:6px; font-size:0.88rem; padding:4px 10px; color:var(--accent);" title="Curve-aware estimated countdown to target drop temperature">⏱️ ETA: --:--</span>
     </div>
     <div class="btn-group">
       <button class="preset-pill" data-temp="200">Light / FC (200°C)</button>
@@ -1754,12 +1855,43 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
     lastStageShort = d.roast_stage_short;
 
-    // 3. Target Bean Temperature evaluation
+    // 3. Target Bean Temperature & Curve-Aware ETA Countdown evaluation
     const targetTemp = parseFloat(targetInput.value) || 215;
     const sensorKey = sensorSelect.value;
     const currentTemp = Number(d[sensorKey] || 0);
+    const currentRor = Number(sensorKey === 'drum_temp_ibts_c' ? d.drum_ror_c_min : d.bean_ror_c_min) || 0;
     const delta = targetTemp - currentTemp;
     const deltaEl = document.getElementById('target-delta');
+    const etaEl = document.getElementById('target-eta');
+
+    if (d.cycle !== 'ROASTING') {
+      etaEl.textContent = `⏱️ ETA: ${d.eta_drop_str || '--:--'}`;
+      etaEl.style.color = '#9ca3af';
+    } else if (delta <= 0) {
+      etaEl.textContent = '⏱️ ETA: DROP NOW!';
+      etaEl.style.color = '#ef4444';
+    } else {
+      const elapsedSec = (Number(d.minutes) || 0) * 60 + (Number(d.seconds) || 0);
+      const pwr = Number(d.heater_power) || 7;
+      const pwrFactor = 1.0 - 0.025 * (pwr - 7.0);
+      const baseRem = Math.max(45, (540 + (targetTemp - 210) * 6.5) * pwrFactor - elapsedSec);
+      let rawEta = baseRem;
+      if (currentRor > 1.2) {
+        const rNow = Math.min(24, currentRor);
+        const rTerm = Math.max(4.5, Math.min(9.5, 0.55 * rNow));
+        const taper = Math.max(0, Math.min(1, delta / 45.0));
+        const rEff = 0.5 * (rNow + ((1 - taper) * rNow + taper * rTerm));
+        const curveEta = (delta / rEff) * 60.0;
+        const alpha = elapsedSec >= 90 ? 1.0 : Math.max(0, Math.min(1, (rNow - 1.2) / 2.3));
+        rawEta = (1 - alpha) * baseRem + alpha * curveEta;
+      }
+      window._etaSmoothed = (window._etaSmoothed > 0) ? (0.3 * rawEta + 0.7 * window._etaSmoothed) : rawEta;
+      const etaSec = Math.max(1, Math.min(5999, Math.round(window._etaSmoothed)));
+      const mm = String(Math.floor(etaSec / 60)).padStart(2, '0');
+      const ss = String(etaSec % 60).padStart(2, '0');
+      etaEl.textContent = `⏱️ ETA: -${mm}:${ss}`;
+      etaEl.style.color = etaSec <= 30 ? '#ef4444' : '#f59e0b';
+    }
 
     if (delta <= 0) {
       deltaEl.textContent = `🎯 TARGET REACHED (+${Math.abs(delta).toFixed(1)} °C)`;

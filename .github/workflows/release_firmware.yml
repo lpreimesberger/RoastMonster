@@ -1,0 +1,91 @@
+# SPDX-License-Identifier: PolyForm-Shield-1.0.0
+# Copyright (c) 2026 Beanzilla Coffee Worldwide LLC. All rights reserved.
+# Required Notice: Copyright (c) 2026 Beanzilla Coffee Worldwide LLC. All rights reserved. Beanzilla, Beanzilla Coffee Worldwide, the Beanzilla Kaiju logo, and BulletSpy are trademarks of Beanzilla Coffee Worldwide LLC.
+
+name: BulletSpy S3 CI & OTA Release Builder
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*.*.*' ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: 'Version string for manual release packaging (e.g. 1.1.0)'
+        required: false
+        default: '1.1.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build-test-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Cache PlatformIO packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: ${{ runner.os }}-pio-${{ hashFiles('esp32/platformio.ini') }}
+
+      - name: Install Python dependencies & PlatformIO
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest platformio
+
+      - name: Run Python BulletSpy Unit Tests
+        run: pytest -v
+
+      - name: Run C++17 Native ESP32 Protocol & ST7305 RLCD Unit Tests
+        run: |
+          g++ -std=c++17 -O2 -Wall -Wextra esp32/test/test_native.cpp -o /tmp/test_native
+          /tmp/test_native
+
+      - name: Build Waveshare ESP32-S3-RLCD-4.2 Firmware
+        working-directory: esp32
+        run: pio run -e waveshare_esp32s3_rlcd42
+
+      - name: Package & Sign OTA Firmware Artifacts
+        env:
+          BEANZILLA_OTA_PRIVATE_KEY: ${{ secrets.BEANZILLA_OTA_PRIVATE_KEY }}
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VER="${GITHUB_REF#refs/tags/v}"
+          else
+            VER="${{ github.event.inputs.release_version || '1.1.0' }}"
+          fi
+          python3 esp32/sign_ota.py \
+            --firmware esp32/.pio/build/waveshare_esp32s3_rlcd42/firmware.bin \
+            --version "${VER}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --out-dir dist
+
+      - name: Upload OTA Firmware Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bulletspy-esp32s3-ota-bundle
+          path: |
+            dist/bulletspy-esp32s3-rlcd42.bin
+            dist/bulletspy-esp32s3-rlcd42.bin.sha256
+            dist/ota_manifest.json
+
+      - name: Publish GitHub Release (on v*.*.* tag push)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/bulletspy-esp32s3-rlcd42.bin
+            dist/bulletspy-esp32s3-rlcd42.bin.sha256
+            dist/ota_manifest.json

@@ -105,6 +105,11 @@ struct BulletState {
     uint8_t     battery_pct        = 95;
     float       target_drop_c      = 210.0f;
 
+    // Curve-aware Estimated Time to Drop (ETA countdown)
+    int         eta_drop_seconds   = -1;
+    char        eta_drop_str[16]   = "--:--";
+    float       eta_smoothed_sec   = -1.0f;
+
     // Roast stage classification
     const char* roast_stage        = "IDLE / STANDBY";
     const char* roast_stage_short  = "STANDBY";
@@ -250,6 +255,104 @@ inline RoastStageInfo compute_roast_stage(float bean_temp_c, uint8_t cycle_id = 
 }
 
 /**
+ * @brief Computes a physics-aware Estimated Time to Drop (ETA countdown) based on:
+ *        1. Rolling history RoR smoothing (eliminating probe jitter),
+ *        2. Declining RoR deceleration modeling (accounting for natural RoR taper
+ *           from Maillard -> First Crack -> Drop rather than naive linear ΔT/RoR),
+ *        3. Power-adjusted baseline cross-fade during early Turning Point (<75s),
+ *        4. EWMA temporal smoothing so the MM:SS countdown ticks smoothly.
+ */
+inline void update_eta_to_drop(BulletState& st) {
+    if (st.cycle_id != 0x06) {
+        st.eta_drop_seconds = -1;
+        st.eta_smoothed_sec = -1.0f;
+        if (st.cycle_id == 0x02 || st.cycle_id == 0x03) {
+            std::snprintf(st.eta_drop_str, sizeof(st.eta_drop_str), "PREHT");
+        } else if (st.cycle_id == 0x04) {
+            std::snprintf(st.eta_drop_str, sizeof(st.eta_drop_str), "READY");
+        } else if (st.cycle_id == 0x07 || st.cycle_id == 0x08) {
+            st.eta_drop_seconds = 0;
+            std::snprintf(st.eta_drop_str, sizeof(st.eta_drop_str), "COOL");
+        } else {
+            std::snprintf(st.eta_drop_str, sizeof(st.eta_drop_str), "--:--");
+        }
+        return;
+    }
+
+    const float delta_t = st.target_drop_c - st.bean_temp_c;
+    if (delta_t <= 0.0f) {
+        st.eta_drop_seconds = 0;
+        st.eta_smoothed_sec = 0.0f;
+        std::snprintf(st.eta_drop_str, sizeof(st.eta_drop_str), "DROP!");
+        return;
+    }
+
+    // 1. Blend live bean_ror_c_min with recent rolling history (up to last 10 samples)
+    float ror_live = st.bean_ror_c_min;
+    if (st.hist_count >= 3) {
+        size_t window = st.hist_count < 10 ? st.hist_count : 10;
+        float sum_ror = 0.0f;
+        for (size_t i = 0; i < window; ++i) {
+            size_t idx = (st.hist_head + HISTORY_MAX_POINTS - 1 - i) % HISTORY_MAX_POINTS;
+            sum_ror += st.hist_ror[idx];
+        }
+        float ror_hist_mean = sum_ror / static_cast<float>(window);
+        ror_live = 0.60f * ror_live + 0.40f * ror_hist_mean;
+    }
+
+    // 2. Power-adjusted baseline roast duration for early Turning Point (<75s or low RoR)
+    const int elapsed_sec = static_cast<int>(st.minutes) * 60 + static_cast<int>(st.seconds);
+    const float power_factor = 1.0f - 0.025f * (static_cast<float>(st.heater_power ? st.heater_power : 7) - 7.0f);
+    const float baseline_total_sec = (540.0f + (st.target_drop_c - 210.0f) * 6.5f) * power_factor;
+    float baseline_rem_sec = baseline_total_sec - static_cast<float>(elapsed_sec);
+    if (baseline_rem_sec < 45.0f) baseline_rem_sec = 45.0f;
+
+    float raw_eta_sec = baseline_rem_sec;
+
+    // 3. Declining-RoR kinematic curve model when RoR is positive
+    if (ror_live > 1.2f) {
+        float r_now = ror_live > 24.0f ? 24.0f : ror_live;
+        // Expected terminal RoR at drop (typically ~55% of mid-roast RoR, clamped to [4.5, 9.5] C/min)
+        float r_terminal = 0.55f * r_now;
+        if (r_terminal < 4.5f) r_terminal = 4.5f;
+        if (r_terminal > 9.5f) r_terminal = 9.5f;
+
+        // Taper weight decreases to 0 as bean_temp approaches target_drop_c
+        float taper = delta_t / 45.0f;
+        if (taper < 0.0f) taper = 0.0f;
+        if (taper > 1.0f) taper = 1.0f;
+
+        float r_end = (1.0f - taper) * r_now + taper * r_terminal;
+        float r_eff = 0.5f * (r_now + r_end);
+        float curve_eta_sec = (delta_t / r_eff) * 60.0f;
+
+        // Smooth handoff from Turning Point baseline (ror < 3.5) to 100% live curve (ror >= 3.5)
+        float alpha = (r_now - 1.2f) / 2.3f;
+        if (elapsed_sec >= 90) alpha = 1.0f;
+        if (alpha < 0.0f) alpha = 0.0f;
+        if (alpha > 1.0f) alpha = 1.0f;
+
+        raw_eta_sec = (1.0f - alpha) * baseline_rem_sec + alpha * curve_eta_sec;
+    }
+
+    if (raw_eta_sec < 1.0f) raw_eta_sec = 1.0f;
+    if (raw_eta_sec > 1800.0f) raw_eta_sec = 1800.0f;
+
+    // 4. Temporal EWMA smoothing so countdown never jitters
+    if (st.eta_smoothed_sec <= 0.0f) {
+        st.eta_smoothed_sec = raw_eta_sec;
+    } else {
+        st.eta_smoothed_sec = 0.30f * raw_eta_sec + 0.70f * st.eta_smoothed_sec;
+    }
+
+    st.eta_drop_seconds = static_cast<int>(std::round(st.eta_smoothed_sec));
+    unsigned int rem_m = static_cast<unsigned int>(st.eta_drop_seconds / 60);
+    unsigned int rem_s = static_cast<unsigned int>(st.eta_drop_seconds % 60);
+    if (rem_m > 99u) rem_m = 99u;
+    std::snprintf(st.eta_drop_str, sizeof(st.eta_drop_str), "-%02u:%02u", rem_m, rem_s);
+}
+
+/**
  * @brief STM32 hardware CRC-32 used by Aillio Bullet R2 command & telemetry frames.
  *        Zeroes the trailing 4 bytes before computing the big-endian word nibble lookup.
  */
@@ -341,6 +444,7 @@ inline void decode_r2_frame(const uint8_t* data, size_t len, BulletState& st) {
         st.roast_stage_desc   = stage.stage_desc;
         st.roast_stage_color  = stage.stage_color;
         st.roast_progress_pct = stage.progress_pct;
+        update_eta_to_drop(st);
 
         bytes_to_hex(data, FRAME_SIZE, st.raw_a0_hex);
         bytes_to_hex(data, FRAME_SIZE, st.raw_pkt1_hex);
@@ -393,6 +497,7 @@ inline void decode_r1_packets(const uint8_t* pkt1, size_t len1,
         st.roast_stage_desc   = stage.stage_desc;
         st.roast_stage_color  = stage.stage_color;
         st.roast_progress_pct = stage.progress_pct;
+        update_eta_to_drop(st);
 
         bytes_to_hex(pkt1, FRAME_SIZE, st.raw_pkt1_hex);
     }
@@ -648,6 +753,9 @@ inline std::string state_to_json(const BulletState& st) {
         "\"room_humidity_pct\":%.1f,"
         "\"battery_v\":%.2f,"
         "\"battery_pct\":%u,"
+        "\"target_drop_c\":%.1f,"
+        "\"eta_drop_seconds\":%d,"
+        "\"eta_drop_str\":\"%s\","
         "\"roast_stage\":\"%s\","
         "\"roast_stage_short\":\"%s\","
         "\"roast_stage_desc\":\"%s\","
@@ -699,6 +807,9 @@ inline std::string state_to_json(const BulletState& st) {
         st.room_humidity_pct,
         st.battery_v,
         st.battery_pct,
+        st.target_drop_c,
+        st.eta_drop_seconds,
+        st.eta_drop_str,
         st.roast_stage,
         st.roast_stage_short,
         st.roast_stage_desc,

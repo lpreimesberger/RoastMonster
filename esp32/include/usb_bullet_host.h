@@ -38,26 +38,37 @@ public:
         usb_host_enabled_  = !skip_usb_host;
 #ifdef ARDUINO
         t0_ms_ = millis();
-        if (usb_host_enabled_) {
-            xTaskCreatePinnedToCore(
-                usb_daemon_task_trampoline,
-                "usb_daemon",
-                4096,
-                this,
-                5,
-                &daemon_task_,
-                0
-            );
-            xTaskCreatePinnedToCore(
-                usb_client_task_trampoline,
-                "usb_client",
-                6144,
-                this,
-                4,
-                &client_task_,
-                0
-            );
+#endif
+    }
+
+    /**
+     * @brief Starts the ESP-IDF USB Host tasks on Core 1 (APP_CPU) at low priority
+     *        so Core 0 (Wi-Fi + TCP/IP stack) is never starved.
+     */
+    void start_usb_host_tasks() {
+#ifdef ARDUINO
+        if (!usb_host_enabled_ || usb_tasks_started_) {
+            return;
         }
+        usb_tasks_started_ = true;
+        xTaskCreatePinnedToCore(
+            usb_daemon_task_trampoline,
+            "usb_daemon",
+            4096,
+            this,
+            2,
+            &daemon_task_,
+            1
+        );
+        xTaskCreatePinnedToCore(
+            usb_client_task_trampoline,
+            "usb_client",
+            6144,
+            this,
+            2,
+            &client_task_,
+            1
+        );
 #endif
     }
 
@@ -146,9 +157,10 @@ public:
 private:
     std::mutex mutex_;
     BulletState state_;
-    bool usb_host_enabled_ = true;
-    bool device_connected_ = false;
-    uint32_t poll_counter_ = 0;
+    bool usb_host_enabled_  = true;
+    bool usb_tasks_started_ = false;
+    bool device_connected_  = false;
+    uint32_t poll_counter_  = 0;
     std::vector<std::vector<uint8_t>> cmd_queue_;
 
 #ifdef ARDUINO
@@ -181,7 +193,8 @@ private:
         }
         while (true) {
             uint32_t event_flags = 0;
-            usb_host_lib_handle_events(portMAX_DELAY, &event_flags);
+            usb_host_lib_handle_events(pdMS_TO_TICKS(50), &event_flags);
+            vTaskDelay(pdMS_TO_TICKS(10));
         }
     }
 
@@ -228,6 +241,7 @@ private:
 
         while (true) {
             usb_host_client_handle_events(client_hdl_, pdMS_TO_TICKS(50));
+            vTaskDelay(pdMS_TO_TICKS(10));
         }
     }
 

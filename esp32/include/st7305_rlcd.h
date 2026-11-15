@@ -351,14 +351,20 @@ public:
         std::snprintf(ror_str, sizeof(ror_str), "%+5.1F", st.bean_ror_c_min);
         draw_text(6, 160, ror_str, 3, true);
 
-        // Roast Clock + Drop Target
+        // Roast Clock + Curve-Aware ETA Countdown to Drop
         draw_hline(0, 192, 158, true);
         draw_text(6, 198, "CLOCK", 1, true);
-        draw_text(82, 198, "TARGET DROP", 1, true);
+        char eta_lbl[20];
+        std::snprintf(eta_lbl, sizeof(eta_lbl), "ETA (%.0FC)", st.target_drop_c);
+        draw_text(76, 198, eta_lbl, 1, true);
         draw_text(6, 212, st.roast_clock, 2, true);
-        char drop_str[16];
-        std::snprintf(drop_str, sizeof(drop_str), "%.0FC", st.target_drop_c);
-        draw_text(82, 212, drop_str, 2, true);
+        if (st.eta_drop_seconds == 0 && st.cycle_id == 0x06) {
+            // Inverted high-contrast badge when drop temperature is reached!
+            fill_rect(74, 209, 78, 20, true);
+            draw_text(80, 212, "DROP!", 2, false);
+        } else {
+            draw_text(76, 212, st.eta_drop_str, 2, true);
+        }
 
         // Progress Bar (y = 236..248)
         draw_rect(6, 236, 146, 10, true);
@@ -403,10 +409,12 @@ public:
                          BEANZILLA_MINI_BITMAP_W, BEANZILLA_MINI_BITMAP_H,
                          BEANZILLA_MINI_BITMAP, true);
 
-        // Plot rolling BT (2px solid) & IBTS (dotted) history
+        // Plot rolling BT (2px solid) & IBTS (dotted) history + ETA projection ray
         if (st.hist_count >= 2) {
             const size_t n = st.hist_count;
             const size_t start_idx = (st.hist_head + HISTORY_MAX_POINTS - n) % HISTORY_MAX_POINTS;
+            int last_x = gx + 2;
+            int last_bt_y = temp_to_y(st.bean_temp_c);
             for (size_t i = 1; i < n; ++i) {
                 size_t idx0 = (start_idx + i - 1) % HISTORY_MAX_POINTS;
                 size_t idx1 = (start_idx + i) % HISTORY_MAX_POINTS;
@@ -417,10 +425,28 @@ public:
                 int bt_y0 = temp_to_y(st.hist_bt[idx0]);
                 int bt_y1 = temp_to_y(st.hist_bt[idx1]);
                 draw_line(x0, bt_y0, x1, bt_y1, true, 2);
+                last_x = x1;
+                last_bt_y = bt_y1;
 
                 if ((i % 2) == 0) {
                     int dt_y1 = temp_to_y(st.hist_ibts[idx1]);
                     fill_rect(x1, dt_y1, 2, 2, true);
+                }
+            }
+
+            // Dotted forward trajectory ray to Target Drop line based on ETA seconds
+            if (st.cycle_id == 0x06 && st.eta_drop_seconds > 0) {
+                int proj_x = last_x + static_cast<int>((st.eta_drop_seconds * (gw - 4)) / (HISTORY_MAX_POINTS - 1));
+                if (proj_x > (gx + gw - 3)) proj_x = gx + gw - 3;
+                if (proj_x > last_x + 4) {
+                    const int steps = (proj_x - last_x) / 4;
+                    for (int s = 1; s <= steps; ++s) {
+                        int px = last_x + ((proj_x - last_x) * s) / steps;
+                        int py = last_bt_y + ((drop_y - last_bt_y) * s) / steps;
+                        set_pixel(px, py, true);
+                    }
+                    // Target intersection crosshair
+                    draw_rect(proj_x - 2, drop_y - 2, 5, 5, true);
                 }
             }
         }

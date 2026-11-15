@@ -20,6 +20,7 @@
 #include <iostream>
 
 #include "../include/bullet_protocol.h"
+#include "../include/ota_updater.h"
 #include "../include/st7305_rlcd.h"
 
 using namespace bulletspy;
@@ -137,6 +138,9 @@ static void test_st7305_display_buffer() {
 
     // Render full telemetry dashboard and ensure pixels were drawn
     BulletState st;
+    st.cycle_id = 0x06;
+    st.minutes = 6;
+    st.seconds = 42;
     st.bean_temp_c = 204.2f;
     st.drum_temp_ibts_c = 221.0f;
     st.bean_ror_c_min = 9.4f;
@@ -148,6 +152,9 @@ static void test_st7305_display_buffer() {
         float bt = 140.0f + i * 1.1f;
         st.push_history(bt, bt + 18.0f, 11.5f - i * 0.04f);
     }
+    update_eta_to_drop(st);
+    assert(st.eta_drop_seconds > 20 && st.eta_drop_seconds < 90);
+    assert(st.eta_drop_str[0] == '-');
     disp.render_dashboard(st, "192.168.1.42", false);
 
     size_t black_bytes = 0;
@@ -155,8 +162,31 @@ static void test_st7305_display_buffer() {
         if (disp.buffer()[i] != 0xFF) black_bytes++;
     }
     assert(black_bytes > 500);
-    std::printf("[PASS] test_st7305_display_buffer (Splash=%zu B, Dashboard=%zu/15000 GRAM bytes active)\n",
-                splash_black_bytes, black_bytes);
+    std::printf("[PASS] test_st7305_display_buffer (ETA=%s [%ds], Splash=%zu B, Dashboard=%zu/15000 GRAM bytes active)\n",
+                st.eta_drop_str, st.eta_drop_seconds, splash_black_bytes, black_bytes);
+}
+
+static void test_ota_security_header_guard() {
+    char err[128] = {0};
+    // 1. Valid ESP32-S3 header (magic=0xE9 at [0], chip_id=0x0009 at [12..13])
+    uint8_t valid_hdr[24] = {0};
+    valid_hdr[0]  = 0xE9;
+    valid_hdr[12] = 0x09;
+    valid_hdr[13] = 0x00;
+    assert(validate_esp32s3_image_header(valid_hdr, sizeof(valid_hdr), err, sizeof(err)) == true);
+
+    // 2. Reject wrong magic (e.g. random HTML/JSON file from a captive portal or 404 page)
+    uint8_t bad_magic[24] = {'<', 'h', 't', 'm', 'l', '>'};
+    assert(validate_esp32s3_image_header(bad_magic, sizeof(bad_magic), err, sizeof(err)) == false);
+
+    // 3. Reject original ESP32 (chip_id=0x0000) or ESP32-C3 (chip_id=0x0005) binary
+    uint8_t wrong_chip[24] = {0};
+    wrong_chip[0]  = 0xE9;
+    wrong_chip[12] = 0x05; // ESP32-C3
+    wrong_chip[13] = 0x00;
+    assert(validate_esp32s3_image_header(wrong_chip, sizeof(wrong_chip), err, sizeof(err)) == false);
+
+    std::printf("[PASS] test_ota_security_header_guard (ESP32-S3 0xE9/0x0009 enforced, foreign/HTML rejected)\n");
 }
 
 int main() {
@@ -165,6 +195,7 @@ int main() {
     test_r1_packet_unpacking();
     test_command_encoding_and_guard();
     test_st7305_display_buffer();
+    test_ota_security_header_guard();
     std::printf("\nAll C++17 ESP32-S3 BulletSpy tests passed!\n");
     return 0;
 }
