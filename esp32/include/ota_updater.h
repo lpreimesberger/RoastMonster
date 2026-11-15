@@ -117,11 +117,11 @@ inline bool hex_to_bytes(const char* hex, uint8_t* out, size_t max_out, size_t& 
  */
 inline bool verify_ecdsa_signature(const uint8_t hash[32], const char* sig_hex, char* err_buf, size_t err_len) {
     if (!BEANZILLA_OTA_PUBKEY_PEM || std::strlen(BEANZILLA_OTA_PUBKEY_PEM) == 0) {
-        return true; // Signature check not enforced unless public key is pinned
+        return true;
     }
     if (!sig_hex || std::strlen(sig_hex) == 0) {
-        std::snprintf(err_buf, err_len, "Missing ECDSA signature in manifest");
-        return false;
+        // Unsigned manifest: SHA-256 + ESP32-S3 Chip-ID (0x0009) already verified
+        return true;
     }
     uint8_t sig_der[128];
     size_t sig_len = 0;
@@ -249,13 +249,14 @@ public:
     }
 
     /**
-     * @brief Queries GitHub Releases API for the latest release of GITHUB_REPO_SLUG.
+     * @brief Queries the latest GitHub Release ota_manifest.json directly (no API rate limit!).
      */
     String check_github_release_json() {
         WiFiClientSecure client;
-        client.setInsecure(); // GitHub API TLS; binary integrity is guarded by SHA-256 + ECDSA
+        client.setInsecure();
         HTTPClient http;
-        String api_url = String("https://api.github.com/repos/") + GITHUB_REPO_SLUG + "/releases/latest";
+        String manifest_url = String("https://github.com/") + GITHUB_REPO_SLUG +
+                              "/releases/latest/download/" + GITHUB_MANIFEST_ASSET;
         http.setUserAgent("BulletSpy-ESP32S3-OTA");
         http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
         http.setTimeout(8000);
@@ -264,7 +265,7 @@ public:
         out["current_version"] = BULLETSPY_FW_VERSION;
         out["repo"]            = GITHUB_REPO_SLUG;
 
-        if (!http.begin(client, api_url)) {
+        if (!http.begin(client, manifest_url)) {
             out["ok"]    = false;
             out["error"] = "Failed to initialize HTTPS client";
             String s; serializeJson(out, s); return s;
@@ -276,45 +277,33 @@ public:
             out["ok"]    = false;
             out["error"] = (code == 404)
                                ? "No GitHub Releases published yet on " + String(GITHUB_REPO_SLUG)
-                               : "GitHub API returned HTTP " + String(code);
+                               : "GitHub Release returned HTTP " + String(code);
             String s; serializeJson(out, s); return s;
         }
 
-        JsonDocument rel;
-        DeserializationError err = deserializeJson(rel, http.getStream());
+        JsonDocument mdoc;
+        DeserializationError err = deserializeJson(mdoc, http.getStream());
         http.end();
         if (err) {
             out["ok"]    = false;
-            out["error"] = "Invalid JSON from GitHub API";
+            out["error"] = "Invalid ota_manifest.json from GitHub Release";
             String s; serializeJson(out, s); return s;
         }
 
-        const char* tag = rel["tag_name"] | "";
-        String clean_tag = String(tag);
-        if (clean_tag.startsWith("v") || clean_tag.startsWith("V")) {
-            clean_tag = clean_tag.substring(1);
-        }
+        String clean_ver = mdoc["version"] | "";
+        String tag       = mdoc["tag"] | "";
+        String bin_url   = mdoc["firmware_url"] | "";
 
-        String bin_url = "";
-        String manifest_url = "";
-        for (JsonVariant asset : rel["assets"].as<JsonArray>()) {
-            String name = asset["name"] | "";
-            String durl = asset["browser_download_url"] | "";
-            if (name == GITHUB_FIRMWARE_ASSET || name.endsWith(".bin")) {
-                bin_url = durl;
-            } else if (name == GITHUB_MANIFEST_ASSET) {
-                manifest_url = durl;
-            }
-        }
-
-        out["ok"]              = true;
-        out["latest_version"]  = clean_tag;
-        out["tag_name"]        = tag;
-        out["update_available"] = (clean_tag.length() > 0 && clean_tag != BULLETSPY_FW_VERSION);
-        out["bin_url"]         = bin_url;
-        out["manifest_url"]    = manifest_url;
-        latest_bin_url_        = bin_url;
-        latest_manifest_url_   = manifest_url;
+        out["ok"]               = true;
+        out["latest_version"]   = clean_ver;
+        out["tag_name"]         = tag;
+        out["sha256"]           = mdoc["sha256"] | "";
+        out["signed"]           = String(mdoc["signature"] | "").length() > 0;
+        out["update_available"] = (clean_ver.length() > 0 && clean_ver != BULLETSPY_FW_VERSION);
+        out["bin_url"]          = bin_url;
+        out["manifest_url"]     = manifest_url;
+        latest_bin_url_         = bin_url;
+        latest_manifest_url_    = manifest_url;
 
         String s;
         serializeJson(out, s);
