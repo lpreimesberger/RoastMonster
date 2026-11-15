@@ -45,7 +45,7 @@ jobs:
           pip install -r requirements.txt pytest platformio
 
       - name: Run Python BulletSpy Unit Tests
-        run: pytest -v
+        run: python -m pytest -v
 
       - name: Run C++17 Native ESP32 Protocol & ST7305 RLCD Unit Tests
         run: |
