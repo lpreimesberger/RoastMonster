@@ -20,6 +20,7 @@
 #include <ArduinoJson.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
+#include <soc/usb_serial_jtag_struct.h>
 
 #include "audio_alerts.h"
 #include "bullet_protocol.h"
@@ -307,10 +308,14 @@ void loop() {
     }
 
     // Only switch USB pins (GPIO19/20) to USB Host Mode when NOT plugged into a PC host
-    // (!HWCDC::isPlugged()) and NOT in SoftAP setup mode. That way, whenever plugged into
-    // a PC, /dev/ttyACM0 stays active 100% of the time with zero Host-vs-Host bus contention!
-    if (now_ms > 5000 && !g_provision.is_ap_setup_mode() && !HWCDC::isPlugged()) {
-        g_bullet.start_usb_host_tasks();
+    // (hardware 1kHz USB SOF frame counter is idle) and NOT in SoftAP setup mode.
+    if (now_ms > 25000 && !g_provision.is_ap_setup_mode()) {
+        uint32_t f0 = USB_SERIAL_JTAG.fram_num.sof_frame_index;
+        delay(3);
+        uint32_t f1 = USB_SERIAL_JTAG.fram_num.sof_frame_index;
+        if (f0 == f1 && !HWCDC::isPlugged()) {
+            g_bullet.start_usb_host_tasks();
+        }
     }
 
     // Side [KEY] button (GPIO18): dismisses AP setup banner on RLCD or advances PRS cycle

@@ -464,18 +464,25 @@ public:
 
     bool connect_sta_or_fallback_ap() {
         WiFi.persistent(false);
+        WiFi.softAPdisconnect(true);
         WiFi.mode(WIFI_STA);
         WiFi.setSleep(WIFI_PS_NONE);
         WiFi.setTxPower(WIFI_POWER_15dBm);
         WiFi.setAutoReconnect(true);
         WiFi.setHostname(config_.hostname);
 
+        // Always run an active 2.4GHz probe scan first: wakes up band-steered tri-band APs
+        // (like cheerleadernet) and auto-corrects phone keyboard SSID capitalization.
+        bool found_in_scan = false;
+        refresh_scan_cache(true, &found_in_scan);
+
         if (std::strlen(config_.wifi_ssid) > 0) {
-            Serial.printf("[BulletSpy Wi-Fi] Connecting to 2.4GHz SSID '%s'...\n", config_.wifi_ssid);
+            Serial.printf("[BulletSpy Wi-Fi] Connecting to 2.4GHz SSID '%s' (found_in_scan=%d)...\n",
+                          config_.wifi_ssid, found_in_scan ? 1 : 0);
             WiFi.begin(config_.wifi_ssid, config_.wifi_password);
             uint32_t start = millis();
-            while (WiFi.status() != WL_CONNECTED && (millis() - start) < 12000) {
-                delay(200);
+            while (WiFi.status() != WL_CONNECTED && (millis() - start) < 16000) {
+                delay(250);
             }
             if (WiFi.status() == WL_CONNECTED) {
                 WiFi.setSleep(WIFI_PS_NONE);
@@ -487,33 +494,6 @@ public:
                 std::snprintf(status_label_, sizeof(status_label_), "%s", WiFi.localIP().toString().c_str());
                 Serial.printf("[BulletSpy Wi-Fi] Connected! IP=%s\n", status_label_);
                 return true;
-            }
-
-            // If direct connect failed, scan 2.4GHz to check for case-mismatch or 5GHz-only SSID
-            WiFi.disconnect(true);
-            delay(100);
-            char orig_ssid[64];
-            std::snprintf(orig_ssid, sizeof(orig_ssid), "%s", config_.wifi_ssid);
-            bool found_in_scan = false;
-            refresh_scan_cache(true, &found_in_scan);
-
-            // If scan auto-corrected SSID capitalization, retry once with the corrected casing
-            if (found_in_scan && std::strcmp(orig_ssid, config_.wifi_ssid) != 0) {
-                WiFi.begin(config_.wifi_ssid, config_.wifi_password);
-                start = millis();
-                while (WiFi.status() != WL_CONNECTED && (millis() - start) < 12000) {
-                    delay(200);
-                }
-                if (WiFi.status() == WL_CONNECTED) {
-                    WiFi.setSleep(WIFI_PS_NONE);
-                    last_error_[0]       = '\0';
-                    ap_mode_active_      = false;
-                    ap_banner_dismissed_ = true;
-                    MDNS.begin(config_.hostname);
-                    MDNS.addService("http", "tcp", 80);
-                    std::snprintf(status_label_, sizeof(status_label_), "%s", WiFi.localIP().toString().c_str());
-                    return true;
-                }
             }
 
             wl_status_t st = WiFi.status();
@@ -533,8 +513,6 @@ public:
             Serial.printf("[BulletSpy Wi-Fi] %s\n", last_error_);
             WiFi.disconnect(true);
             delay(100);
-        } else {
-            refresh_scan_cache(false, nullptr);
         }
 
         // Fallback: Start SoftAP + Captive Portal DNS server
